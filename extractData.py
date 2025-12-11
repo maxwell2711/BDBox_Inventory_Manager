@@ -74,7 +74,37 @@ class InventoryManager:
             return load_workbook(output_path)
         else:
             wb = Workbook()
+            # Remove the default sheet if it exists
+            if 'Sheet' in wb.sheetnames:
+                wb.remove(wb['Sheet'])
             return wb
+    
+    def _organize_sheets(self, wb):
+        """Organize sheets in the desired order and remove any default sheets.
+        
+        Order: Current Inventory & Predictions, Inventory History, Sales Differences, Average Use
+        
+        Args:
+            wb: Workbook object
+        """
+        # Define desired sheet order
+        desired_order = [
+            self.sheet_names['predictions'],
+            self.sheet_names['history'],
+            self.sheet_names['differences'],
+            self.sheet_names['average']
+        ]
+        
+        # Remove any default or unwanted sheets
+        for sheet_name in wb.sheetnames[:]:
+            if sheet_name not in desired_order:
+                wb.remove(wb[sheet_name])
+        
+        # Reorder sheets according to desired order
+        for idx, sheet_name in enumerate(desired_order):
+            if sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                wb.move_sheet(sheet, offset=idx - wb.index(sheet))
     
     def _get_existing_labels(self, ws):
         """Extract existing labels from column A of a worksheet.
@@ -111,13 +141,13 @@ class InventoryManager:
         for idx, label in enumerate(labels, start=2):
             ws[f'{column}{idx}'] = label
     
-    def _add_inventory_column(self, ws, labels: list, stock_values: list, column_header: str):
+    def _add_inventory_column(self, ws, all_labels: list, label_to_stock: dict, column_header: str):
         """Add a new inventory column to the worksheet.
         
         Args:
             ws: Worksheet object
-            labels: List of box labels
-            stock_values: List of corresponding stock values
+            all_labels: Complete merged list of all box labels in correct order
+            label_to_stock: Dictionary mapping labels to their stock values
             column_header: Header for the new column (e.g., 'Sale 155' or 'Restock')
         """
         # Find the next available column
@@ -127,13 +157,44 @@ class InventoryManager:
         # Write the column header
         ws[f'{col_letter}1'] = column_header
         
-        # Create a mapping of labels to stock values
-        label_to_stock = dict(zip(labels, stock_values))
-        
         # Write stock values, leaving blanks for new boxes
-        for idx, label in enumerate(labels, start=2):
+        for idx, label in enumerate(all_labels, start=2):
             if label in label_to_stock:
                 ws[f'{col_letter}{idx}'] = label_to_stock[label]
+    
+    def _realign_existing_columns(self, ws, existing_labels: list, all_labels: list):
+        """Realign all existing inventory columns when new labels are added.
+        
+        This ensures that stock values in previous columns stay aligned with their correct labels
+        after new labels are inserted into the merged list.
+        
+        Args:
+            ws: Worksheet object
+            existing_labels: Original list of labels before merge
+            all_labels: Merged list of labels after adding new ones
+        """
+        # Create a mapping of old positions to new positions
+        label_to_new_row = {label: idx + 2 for idx, label in enumerate(all_labels)}
+        
+        # Get all inventory columns (columns B onwards)
+        for col in range(2, ws.max_column + 1):
+            col_letter = get_column_letter(col)
+            
+            # Store all values first to avoid overwriting
+            values_to_move = {}
+            for idx, label in enumerate(existing_labels, start=2):
+                cell_value = ws[f'{col_letter}{idx}'].value
+                if cell_value is not None:
+                    values_to_move[label] = cell_value
+            
+            # Clear the entire column except header
+            for row in range(2, ws.max_row + 1):
+                ws[f'{col_letter}{row}'].value = None
+            
+            # Write values back to new positions
+            for label, value in values_to_move.items():
+                new_row = label_to_new_row[label]
+                ws[f'{col_letter}{new_row}'] = value
     
     def _update_inventory_history_internal(self, labels: list, stock_values: list, column_header: str):
         """Internal method to update inventory history with a new column.
@@ -153,12 +214,21 @@ class InventoryManager:
         existing_labels = self._get_existing_labels(ws) if ws.max_row > 0 else []
         all_labels = self._merge_labels(existing_labels, labels)
         
+        # Realign existing columns if new labels were added
+        if len(all_labels) > len(existing_labels):
+            self._realign_existing_columns(ws, existing_labels, all_labels)
+        
         # Write labels to column A
         self._write_labels_to_column(ws, all_labels)
         
-        # Add the new inventory column
-        self._add_inventory_column(ws, all_labels, stock_values, column_header)
+        # Create a mapping of labels to stock values
+        label_to_stock = dict(zip(labels, stock_values))
         
+        # Add the new inventory column
+        self._add_inventory_column(ws, all_labels, label_to_stock, column_header)
+        
+        # Organize sheets and remove defaults
+        self._organize_sheets(wb)
         wb.save(output_path)
     
     def update_inventory_history(self, labels: list, stock_values: list, sale_number: str):
@@ -263,6 +333,8 @@ class InventoryManager:
             
             diff_col_counter += 1
         
+        # Organize sheets and remove defaults
+        self._organize_sheets(wb)
         wb.save(output_path)
     
     def update_average_use(self):
@@ -314,6 +386,8 @@ class InventoryManager:
                 avg_use = sum(differences) / len(differences)
                 avg_ws[f'B{idx}'] = round(avg_use, 2)
         
+        # Organize sheets and remove defaults
+        self._organize_sheets(wb)
         wb.save(output_path)
     
     def update_predictions(self, current_stock_file: str = None, current_stock_columns: tuple = ('Label', 'Stock')):
@@ -396,6 +470,8 @@ class InventoryManager:
         pred_ws.column_dimensions['C'].width = 15
         pred_ws.column_dimensions['D'].width = 20
         
+        # Organize sheets and remove defaults
+        self._organize_sheets(wb)
         wb.save(output_path)
     
     def _get_shortage_color(self, shortage: float) -> str:
