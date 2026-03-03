@@ -430,7 +430,7 @@ class InventoryManager:
         # Write headers
         pred_ws['A1'] = 'Label'
         pred_ws['B1'] = 'Current Stock'
-        pred_ws['C1'] = 'Weekly Prediction'
+        pred_ws['C1'] = 'Quarterly Prediction'
         pred_ws['D1'] = 'Status'
         
         # Write data
